@@ -1,8 +1,13 @@
 <launch>
+    <arg name="test_recorder" default="true"/>
+
+    <arg name="config_file" default="$(find ros_data_recorder)/config.yaml"/>
+    <arg name="data_dir" default="$(find ros_data_recorder)/data/ros_recordings"/>
 
     <node pkg="ros_data_recorder" type="data_recorder.py" name="ros_data_recorder" respawn="true" output="screen">
-        <param name="config_file" value="$(find ros_data_recorder)/config.yaml"/>
-        <param name="data_dir" value="$(find ros_data_recorder)/data/ros_recordings"/>
+        <param name="config_file" value="$(arg config_file)"/>
+        <param name="data_dir" value="$(arg data_dir)"/>
     </node>
 
+    <node pkg="ros_data_recorder" type="test_recorder.py" name="test_recorder" respawn="true" output="screen" if="$(arg test_recorder)"/>
 </launch>
