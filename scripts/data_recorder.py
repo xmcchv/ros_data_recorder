@@ -288,6 +288,47 @@ class DataRecorder:
         
         return bag_files
     
+    def check_and_open_existing_bag(self):
+        """启动时检查是否有可追加的bag文件"""
+        current_time = rospy.Time.now().to_sec()
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 查询当前时间在哪个bag文件的时间范围内
+            cursor.execute('''
+                SELECT filename, start_time, end_time FROM recordings 
+                WHERE start_time <= ? AND end_time >= ?
+                ORDER BY start_time DESC
+            ''', (current_time, current_time))
+            
+            result = cursor.fetchone()
+            if result:
+                filename, start_time, end_time = result
+                filepath = os.path.join(self.base_dir, filename)
+                
+                if os.path.exists(filepath):
+                    # 以追加模式打开现有bag文件
+                    self.current_bag = rosbag.Bag(filepath, 'a')
+                    self.bag_start_time = rospy.Time.from_sec(start_time)
+                    
+                    # 更新数据库中的end_time为当前时间
+                    cursor.execute('''
+                        UPDATE recordings SET end_time = ? 
+                        WHERE filename = ?
+                    ''', (current_time, filename))
+                    conn.commit()
+                    
+                    rospy.loginfo(f"Appending to existing bag file: {filename}")
+                    rospy.loginfo(f"Original time range: {start_time} to {end_time}")
+                    rospy.loginfo(f"Now appending from: {current_time}")
+                
+            conn.close()
+            
+        except Exception as e:
+            rospy.logerr(f"Error checking existing bags: {e}")
+    
     def create_new_bag(self):
         if self.current_bag:
             try:
@@ -328,8 +369,16 @@ class DataRecorder:
         try:
             self.current_bag = rosbag.Bag(filepath, 'w')
             self.bag_start_time = rospy.Time.now()
+            
+            # 立即添加到数据库（初始记录，end_time设为start_time）
+            self.add_recording_to_db(
+                filename,
+                self.bag_start_time.to_sec(),
+                self.bag_start_time.to_sec(),  # 初始end_time等于start_time
+                0  # 初始文件大小为0
+            )
+            
             rospy.loginfo(f"Created new bag file: {filepath}")
-            rospy.loginfo(f"This bag will contain data until: {next_hour_time}")
             rospy.loginfo(f"This bag will contain data until: {next_hour_time}")
         except Exception as e:
             rospy.logerr(f"Error creating bag file: {e}")
