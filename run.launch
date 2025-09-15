@@ -1,0 +1,8 @@
+<launch>
+
+    <node pkg="ros_data_recorder" type="data_recorder.py" name="ros_data_recorder" respawn="true" output="screen">
+        <param name="config_file" value="$(find ros_data_recorder)/config.yaml"/>
+        <param name="data_dir" value="$(find ros_data_recorder)/data/ros_recordings"/>
+    </node>
+
+</launch>
