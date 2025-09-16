@@ -8,10 +8,9 @@ echo $SCRIPT_DIR $ROOT_DIR
 cd $ROOT_DIR/../../
 # 转到catkin工作空间
 
-source devel/setup.bash
-
-roslaunch ros_data_recorder run.launch
-
-
+if catkin_make -j8;then
+    source devel/setup.bash
+    roslaunch ros_data_recorder run.launch
+fi
 
 

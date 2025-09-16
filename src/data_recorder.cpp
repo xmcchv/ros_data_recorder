@@ -104,6 +104,7 @@ private:
     {
         if (msg->data.size() >= 2)
         {
+            // 按接收的时间戳前后10秒
             double start_timestamp = msg->data[0] - 10.0;
             double end_timestamp = msg->data[1] + 10.0;
             
