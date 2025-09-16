@@ -17,14 +17,28 @@
 #include <filesystem>
 #include <chrono>
 #include <ctime>
+#include <csignal>
+#include <atomic>
 
 namespace fs = std::filesystem;
+
+// 在类定义前添加全局变量
+std::atomic<bool> g_shutdown_requested{false};
+
+// 信号处理函数
+void signalHandler(int signal)
+{
+    g_shutdown_requested = true;
+    ros::shutdown();
+}
 
 class DataRecorder
 {
 public:
     DataRecorder() : nh_("~")
     {
+        std::signal(SIGINT, signalHandler);
+        std::signal(SIGTERM, signalHandler);
         // 加载配置
         std::string config_file;
         nh_.param("config_file", config_file, std::string("config/config.yaml"));
@@ -84,7 +98,11 @@ public:
     
     void run()
     {
-        ros::spin();
+        while (!g_shutdown_requested && ros::ok())
+        {
+            ros::spinOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
 
 private:
@@ -125,7 +143,7 @@ private:
     {
         ROS_INFO("Recording worker started");
         
-        while (!stop_threads_ && ros::ok())
+        while (!stop_threads_ && !g_shutdown_requested && ros::ok())
         {
             sensor_msgs::CompressedImage msg;
             {
@@ -148,7 +166,7 @@ private:
     {
         ROS_INFO("Playback worker started");
         
-        while (!stop_threads_ && ros::ok())
+        while (!stop_threads_ && !g_shutdown_requested && ros::ok())
         {
             std::pair<double, double> timestamps;
             {
@@ -194,6 +212,10 @@ private:
         {
             ROS_WARN("No bag files found for the specified time range");
             return;
+        }
+        else
+        {
+            ROS_INFO("Found %d bag files for playback", bag_files.size());
         }
         
         for (const auto& bag_file : bag_files)
