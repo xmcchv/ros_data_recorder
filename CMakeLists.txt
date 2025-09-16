@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.1)
 project(ros_data_recorder)
 
 find_package(catkin REQUIRED COMPONENTS
@@ -9,15 +9,51 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
   cv_bridge
   message_filters
+  rosbag
 )
 
-catkin_package()
+find_package(OpenCV REQUIRED)
+find_package(SQLite3 REQUIRED)
+set(YAML_CPP_INCLUDE_DIR "/usr/local/include/yaml-cpp")
+set(YAML_CPP_LIBRARIES "/usr/local/lib/libyaml-cpp.a")
 
-install(PROGRAMS
-  scripts/data_recorder.py
-  scripts/data_player.py
-  scripts/web_interface.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+catkin_package(
+  INCLUDE_DIRS include
+  LIBRARIES ${PROJECT_NAME}
+  CATKIN_DEPENDS roscpp std_msgs sensor_msgs
+)
+
+include_directories(
+  include
+  ${catkin_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  ${SQLite3_INCLUDE_DIRS}
+  ${YAML_CPP_INCLUDE_DIR}
+)
+
+# 设置C++17标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# 创建C++可执行文件
+add_executable(data_recorder src/data_recorder.cpp)
+target_link_libraries(data_recorder
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  ${SQLite3_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+
+add_executable(test_recorder src/test_recorder.cpp)
+target_link_libraries(test_recorder
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
+# 安装可执行文件
+install(TARGETS data_recorder test_recorder
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
 install(DIRECTORY launch
