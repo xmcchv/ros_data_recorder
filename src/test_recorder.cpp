@@ -36,10 +36,10 @@ public:
     
     std::pair<double, double> sendTestTimestamps()
     {
-        // auto current_time = std::chrono::system_clock::now().time_since_epoch().count() / 1e9;
+        auto current_time = std::chrono::system_clock::now().time_since_epoch().count() / 1e9;
         
-        double start_timestamp = 1758015360.46; //current_time - 60.0;
-        double end_timestamp = 1758015370.56; //current_time - 30.0;
+        double start_timestamp = current_time - 60.0;
+        double end_timestamp = current_time - 30.0;
         
         std_msgs::Float32MultiArray timestamp_msg;
         timestamp_msg.data = {static_cast<float>(start_timestamp), static_cast<float>(end_timestamp)};
