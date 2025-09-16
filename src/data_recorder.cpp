@@ -207,10 +207,6 @@ private:
             ROS_WARN("No bag files found for the specified time range");
             return;
         }
-        else
-        {
-            ROS_INFO("Found %d bag files for playback", bag_files.size());
-        }
         
         for (const auto& bag_file : bag_files)
         {
@@ -220,22 +216,32 @@ private:
             {
                 rosbag::Bag bag(bag_file, rosbag::bagmode::Read);
                 
+                // 获取bag文件的开始和结束时间
                 rosbag::View full_view(bag);
-                ros::Time bag_start = full_view.getBeginTime();
-                ros::Time bag_end = full_view.getEndTime();
-                double bag_start_sec = bag_start.toSec();
-                double bag_end_sec = bag_end.toSec();
+                ros::Time bag_start_time = full_view.getBeginTime();
+                ros::Time bag_end_time = full_view.getEndTime();
                 
-                // Then use bag_start_sec and bag_end_sec in your calculations:
-                double play_start = std::max(start_timestamp, bag_start_sec);
-                double play_end = std::min(end_timestamp, bag_end_sec);
+                double bag_start = bag_start_time.toSec();
+                double bag_end = bag_end_time.toSec();
                 
-                if (play_start >= play_end) continue;
+                // 计算实际播放的时间范围
+                double play_start = std::max(start_timestamp, bag_start);
+                double play_end = std::min(end_timestamp, bag_end);
+                
+                if (play_start >= play_end) 
+                {
+                    ROS_INFO("Skipping bag %s - no overlap with requested time range", bag_file.c_str());
+                    bag.close();
+                    continue;
+                }
                 
                 ROS_INFO("Playing %s from %.6f to %.6f", bag_file.c_str(), play_start, play_end);
                 
-                rosbag::View view(bag, rosbag::TopicQuery("/detectImage/compressed"), 
-                               ros::Time().fromSec(play_start), ros::Time().fromSec(play_end));
+                // 使用正确的时间对象创建视图
+                ros::Time start_time = ros::Time().fromSec(play_start);
+                ros::Time end_time = ros::Time().fromSec(play_end);
+                
+                rosbag::View view(bag, rosbag::TopicQuery("/detectImage/compressed"), start_time, end_time);
                 
                 for (const auto& m : view)
                 {
@@ -286,21 +292,22 @@ private:
             return result;
         }
         
+        // 修改SQL查询以正确查找重叠的时间段
         const char* sql = "SELECT filename FROM recordings "
                          "WHERE (start_time <= ? AND end_time >= ?) "
-                         "OR (start_time <= ? AND end_time >= ?) "
-                         "OR (start_time >= ? AND end_time <= ?) "
+                         "OR (start_time >= ? AND start_time <= ?) "
+                         "OR (end_time >= ? AND end_time <= ?) "
                          "ORDER BY start_time";
         
         sqlite3_stmt* stmt;
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK)
         {
-            sqlite3_bind_double(stmt, 1, end_ts);
-            sqlite3_bind_double(stmt, 2, end_ts);
-            sqlite3_bind_double(stmt, 3, start_ts);
-            sqlite3_bind_double(stmt, 4, start_ts);
-            sqlite3_bind_double(stmt, 5, start_ts);
-            sqlite3_bind_double(stmt, 6, end_ts);
+            sqlite3_bind_double(stmt, 1, end_ts);    // start_time <= end_ts
+            sqlite3_bind_double(stmt, 2, start_ts);  // end_time >= start_ts
+            sqlite3_bind_double(stmt, 3, start_ts);  // start_time >= start_ts
+            sqlite3_bind_double(stmt, 4, end_ts);    // start_time <= end_ts
+            sqlite3_bind_double(stmt, 5, start_ts);  // end_time >= start_ts
+            sqlite3_bind_double(stmt, 6, end_ts);    // end_time <= end_ts
             
             while (sqlite3_step(stmt) == SQLITE_ROW)
             {
@@ -309,12 +316,17 @@ private:
                 if (fs::exists(filepath))
                 {
                     result.push_back(filepath);
+                    ROS_INFO("Found matching bag file: %s", filepath.c_str());
                 }
                 else
                 {
                     ROS_WARN("Bag file not found: %s", filepath.c_str());
                 }
             }
+        }
+        else
+        {
+            ROS_ERROR("Failed to prepare SQL statement: %s", sqlite3_errmsg(db));
         }
         
         sqlite3_finalize(stmt);
@@ -368,6 +380,7 @@ private:
             next_hour_tm.tm_sec = 0;
             std::time_t next_hour_time = std::mktime(&next_hour_tm);
             
+            // 只添加记录到数据库，不设置结束时间（因为还没有结束）
             addRecordingToDB(filename, bag_start_time_.toSec(), next_hour_time, 0);
             ROS_INFO("Created new bag file: %s", filepath.c_str());
         }
@@ -407,21 +420,57 @@ private:
         sqlite3* db;
         if (sqlite3_open(db_path_.c_str(), &db) == SQLITE_OK)
         {
-            const char* sql = "INSERT INTO recordings (filename, start_time, end_time, duration, file_size) "
-                           "VALUES (?, ?, ?, ?, ?)";
+            // 首先检查是否已存在相同文件名的记录
+            const char* check_sql = "SELECT id FROM recordings WHERE filename = ?";
+            sqlite3_stmt* check_stmt;
+            bool record_exists = false;
+            
+            if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, nullptr) == SQLITE_OK)
+            {
+                sqlite3_bind_text(check_stmt, 1, filename.c_str(), -1, SQLITE_STATIC);
+                if (sqlite3_step(check_stmt) == SQLITE_ROW)
+                {
+                    record_exists = true;
+                }
+            }
+            sqlite3_finalize(check_stmt);
+            
+            // 根据是否存在决定是插入还是更新
+            const char* sql;
+            if (record_exists)
+            {
+                sql = "UPDATE recordings SET start_time = ?, end_time = ?, duration = ?, file_size = ? WHERE filename = ?";
+            }
+            else
+            {
+                sql = "INSERT INTO recordings (filename, start_time, end_time, duration, file_size) "
+                      "VALUES (?, ?, ?, ?, ?)";
+            }
             
             sqlite3_stmt* stmt;
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK)
             {
-                sqlite3_bind_text(stmt, 1, filename.c_str(), -1, SQLITE_STATIC);
-                sqlite3_bind_double(stmt, 2, start_time);
-                sqlite3_bind_double(stmt, 3, end_time);
-                sqlite3_bind_double(stmt, 4, end_time - start_time);
-                sqlite3_bind_int64(stmt, 5, file_size);
+                if (record_exists)
+                {
+                    sqlite3_bind_double(stmt, 1, start_time);
+                    sqlite3_bind_double(stmt, 2, end_time);
+                    sqlite3_bind_double(stmt, 3, end_time - start_time);
+                    sqlite3_bind_int64(stmt, 4, file_size);
+                    sqlite3_bind_text(stmt, 5, filename.c_str(), -1, SQLITE_STATIC);
+                }
+                else
+                {
+                    sqlite3_bind_text(stmt, 1, filename.c_str(), -1, SQLITE_STATIC);
+                    sqlite3_bind_double(stmt, 2, start_time);
+                    sqlite3_bind_double(stmt, 3, end_time);
+                    sqlite3_bind_double(stmt, 4, end_time - start_time);
+                    sqlite3_bind_int64(stmt, 5, file_size);
+                }
                 
                 if (sqlite3_step(stmt) != SQLITE_DONE)
                 {
-                    ROS_ERROR("Failed to insert recording: %s", sqlite3_errmsg(db));
+                    ROS_ERROR("Failed to %s recording: %s", 
+                             record_exists ? "update" : "insert", sqlite3_errmsg(db));
                 }
             }
             sqlite3_finalize(stmt);
@@ -471,7 +520,11 @@ private:
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "data_recorder");
+    // 注册信号处理函数
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+    
+    ros::init(argc, argv, "data_recorder", ros::init_options::NoSigintHandler);
     DataRecorder recorder;
     recorder.run();
     return 0;
