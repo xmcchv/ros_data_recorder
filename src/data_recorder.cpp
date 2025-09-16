@@ -197,7 +197,7 @@ private:
             ROS_ERROR("Error writing to bag: %s", e.what());
         }
     }
-    
+
     void playbackFromBag(double start_timestamp, double end_timestamp)
     {
         ROS_INFO("Playing back from %.6f to %.6f", start_timestamp, end_timestamp);
@@ -371,7 +371,7 @@ private:
         
         try
         {
-            current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Write);
+            current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Append);
             bag_start_time_ = ros::Time::now();
             
             // 计算下一个整点时间
