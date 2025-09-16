@@ -37,8 +37,6 @@ class DataRecorder
 public:
     DataRecorder() : nh_("~")
     {
-        std::signal(SIGINT, signalHandler);
-        std::signal(SIGTERM, signalHandler);
         // 加载配置
         std::string config_file;
         nh_.param("config_file", config_file, std::string("config/config.yaml"));
@@ -98,11 +96,7 @@ public:
     
     void run()
     {
-        while (!g_shutdown_requested && ros::ok())
-        {
-            ros::spinOnce();
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
+        ros::spin();
     }
 
 private:
@@ -225,7 +219,6 @@ private:
             try
             {
                 rosbag::Bag bag(bag_file, rosbag::bagmode::Read);
-                
                 
                 rosbag::View full_view(bag);
                 ros::Time bag_start = full_view.getBeginTime();
