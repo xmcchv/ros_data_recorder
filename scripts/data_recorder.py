@@ -4,7 +4,7 @@ import rosbag
 import os
 import time
 from datetime import datetime
-from std_msgs.msg import String, Int32MultiArray
+from std_msgs.msg import String, Float32MultiArray
 from sensor_msgs.msg import Image, CompressedImage
 import cv2
 from cv_bridge import CvBridge
@@ -62,7 +62,7 @@ class DataRecorder:
         self.playback_process.start()
         
         # 订阅时间戳控制消息
-        rospy.Subscriber('/recordTimes', Int32MultiArray, self.timestamp_callback)
+        rospy.Subscriber('/recordTimes', Float32MultiArray, self.timestamp_callback)
         
         # 订阅/detectImage/compressed话题 - 录制线程处理
         rospy.Subscriber('/detectImage/compressed', CompressedImage, self.detect_image_callback)
@@ -115,12 +115,12 @@ class DataRecorder:
         """处理时间戳控制消息"""
         if len(msg.data) >= 2:
             # 时间两边延长10秒
-            start_timestamp = msg.data[0] - 10
-            end_timestamp = msg.data[1] + 10
+            start_timestamp = msg.data[0] - 10.0
+            end_timestamp = msg.data[1] + 10.0
             
             if start_timestamp > 0 and end_timestamp > start_timestamp:
                 self.timestamp_queue.put((start_timestamp, end_timestamp))
-                rospy.loginfo(f"Received playback request: {start_timestamp} to {end_timestamp}")
+                rospy.loginfo(f"Received playback request: {start_timestamp:.6f} to {end_timestamp:.6f}")
             else:
                 rospy.logwarn("Invalid timestamp range")
         else:
@@ -366,20 +366,24 @@ class DataRecorder:
         # 设置bag的结束时间
         self.bag_end_time = next_hour_time
         
+        # 计算整点小时的结束时间戳（下一个整点的时间戳）
+        end_timestamp = next_hour_time.timestamp()
+        
         try:
             self.current_bag = rosbag.Bag(filepath, 'w')
             self.bag_start_time = rospy.Time.now()
             
-            # 立即添加到数据库（初始记录，end_time设为start_time）
+            # 立即添加到数据库，end_time设置为整点小时的结束时间
             self.add_recording_to_db(
                 filename,
                 self.bag_start_time.to_sec(),
-                self.bag_start_time.to_sec(),  # 初始end_time等于start_time
+                end_timestamp,  # 使用整点小时的结束时间
                 0  # 初始文件大小为0
             )
             
             rospy.loginfo(f"Created new bag file: {filepath}")
             rospy.loginfo(f"This bag will contain data until: {next_hour_time}")
+            rospy.loginfo(f"Database record: {self.bag_start_time.to_sec()} to {end_timestamp}")
         except Exception as e:
             rospy.logerr(f"Error creating bag file: {e}")
             self.current_bag = None
