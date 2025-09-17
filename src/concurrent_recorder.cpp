@@ -2,7 +2,7 @@
 #include <ros/ros.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
-#include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Float64MultiArray.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CompressedImage.h>
 #include <cv_bridge/cv_bridge.h>
@@ -95,7 +95,7 @@ void ConcurrentRecorder::run()
     stop();
 }
 
-void ConcurrentRecorder::timestampCallback(const std_msgs::Float32MultiArray::ConstPtr& msg)
+void ConcurrentRecorder::timestampCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
 {
     if (msg->data.size() >= 2)
     {

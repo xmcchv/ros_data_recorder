@@ -1,5 +1,5 @@
 #include <ros/ros.h>
-#include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Float64MultiArray.h>
 #include <sensor_msgs/Image.h>
 #include <chrono>
 #include <thread>
@@ -13,7 +13,7 @@ public:
     TestRecorder() : nh_("~")
     {
         // 发布器
-        timestamp_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("/recordTimes", 10);
+        timestamp_pub_ = nh_.advertise<std_msgs::Float64MultiArray>("/recordTimes", 10);
         
         // 订阅器
         image_sub_ = nh_.subscribe("/recordImage", 10, &TestRecorder::imageCallback, this);
@@ -41,7 +41,7 @@ public:
         double start_timestamp = current_time - 60.0;
         double end_timestamp = current_time - 30.0;
         
-        std_msgs::Float32MultiArray timestamp_msg;
+        std_msgs::Float64MultiArray timestamp_msg;
         timestamp_msg.data = {start_timestamp, end_timestamp};
         
         timestamp_pub_.publish(timestamp_msg);

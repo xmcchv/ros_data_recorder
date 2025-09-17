@@ -4,7 +4,7 @@
 #include <ros/ros.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
-#include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Float64MultiArray.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CompressedImage.h>
 #include <sensor_msgs/image_encodings.h>
@@ -50,7 +50,7 @@ private:
     void closeCurrentBag();
     
     // 回调函数
-    void timestampCallback(const std_msgs::Float32MultiArray::ConstPtr& msg);
+    void timestampCallback(const std_msgs::Float64MultiArray::ConstPtr& msg);
     void imageCallback(const sensor_msgs::CompressedImage::ConstPtr& msg);
     
     // 工作线程函数
