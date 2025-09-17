@@ -42,10 +42,11 @@ public:
         double end_timestamp = current_time - 30.0;
         
         std_msgs::Float32MultiArray timestamp_msg;
-        timestamp_msg.data = {static_cast<float>(start_timestamp), static_cast<float>(end_timestamp)};
+        timestamp_msg.data = {start_timestamp, end_timestamp};
         
         timestamp_pub_.publish(timestamp_msg);
         ROS_INFO("Sent timestamps with decimals: %.6f to %.6f", start_timestamp, end_timestamp);
+        ROS_INFO("Sent timestamps with decimals: %.6f to %.6f", timestamp_msg.data[0], timestamp_msg.data[1]);
         
         return {start_timestamp, end_timestamp};
     }

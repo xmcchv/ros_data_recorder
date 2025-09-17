@@ -37,37 +37,42 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # 创建C++可执行文件
-add_executable(data_recorder src/data_recorder.cpp)
-target_link_libraries(data_recorder
+add_library(${PROJECT_NAME}
+  src/concurrent_recorder.cpp
+)
+
+target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
   ${SQLite3_LIBRARIES}
   ${YAML_CPP_LIBRARIES}
 )
 
-add_executable(test_recorder src/test_recorder.cpp)
-target_link_libraries(test_recorder
-  ${catkin_LIBRARIES}
-  ${OpenCV_LIBRARIES}
+add_executable(${PROJECT_NAME}_node
+  src/main.cpp
 )
 
-# 安装可执行文件
-install(TARGETS data_recorder test_recorder
+target_link_libraries(${PROJECT_NAME}_node
+  ${PROJECT_NAME}
+  ${catkin_LIBRARIES}
+)
+
+install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_node
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(DIRECTORY launch
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+install(DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
 )
 
-install(DIRECTORY config
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
-)
 
-install(DIRECTORY templates
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+add_executable(test_recorder src/test_recorder.cpp)
+target_link_libraries(test_recorder
+  ${catkin_LIBRARIES}
+  ${PROJECT_NAME}
 )
-
-install(DIRECTORY web_static
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+install(TARGETS test_recorder
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

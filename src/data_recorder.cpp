@@ -32,6 +32,8 @@ void signalHandler(int signal)
     ros::shutdown();
 }
 
+#include <std_msgs/Int32MultiArray.h>  // 修改头文件
+
 class DataRecorder
 {
 public:
@@ -100,7 +102,7 @@ public:
     }
 
 private:
-    void timestampCallback(const std_msgs::Float32MultiArray::ConstPtr& msg)
+    void timestampCallback(const std_msgs::Int32MultiArray::ConstPtr& msg)  // 修改回调函数
     {
         if (msg->data.size() >= 2)
         {

@@ -4,7 +4,7 @@
     <arg name="config_file" default="$(find ros_data_recorder)/config.yaml"/>
     <arg name="data_dir" default="$(find ros_data_recorder)/data/ros_recordings"/>
 
-    <node pkg="ros_data_recorder" type="data_recorder" name="data_recorder" respawn="true" output="screen">
+    <node pkg="ros_data_recorder" type="ros_data_recorder_node" name="ros_data_recorder_node" respawn="true" output="screen">
         <param name="config_file" value="$(arg config_file)"/>
         <param name="data_dir" value="$(arg data_dir)"/>
     </node>

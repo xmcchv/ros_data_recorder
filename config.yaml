@@ -1,3 +1,12 @@
-topics: ['/recordImage']
+# 数据记录器配置
 compression_quality: 90
-image_compression_format: 'jpeg'
+image_compression_format: "jpeg"
+
+# 话题配置
+image_topic: "/detectImage/compressed"
+record_topic: "/recordTimes"
+playback_topic: "/recordImage"
+
+# 性能配置
+max_buffer_size: 10485760  # 10MB
+flush_interval: 1.0        # 1秒
