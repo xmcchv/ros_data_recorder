@@ -25,7 +25,7 @@ void signalHandler(int signal)
     ros::shutdown();
 }
 
-ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), max_bag_duration_(3600.0)  // 默认1小时
+ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), max_bag_duration_(3600.0)
 {
     // 加载配置
     std::string config_file;
@@ -36,6 +36,10 @@ ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), max_bag_duration_(3600.0)  
     if (config_.find("max_bag_duration") != config_.end()) {
         try {
             max_bag_duration_ = std::stod(config_["max_bag_duration"]);
+            if (max_bag_duration_ > 0) {
+                max_bag_duration_ = std::floor(max_bag_duration_ / 60) * 60;
+                max_bag_duration_ = std::max(max_bag_duration_, 60.0);  // 最小1分钟
+            }
             ROS_INFO("Loaded bag duration: %.1f seconds", max_bag_duration_);
         } catch (...) {
             ROS_WARN("Invalid max_bag_duration config, using default 3600s");
@@ -207,7 +211,7 @@ void ConcurrentRecorder::bagManagementWorker()
             }
             else
             {
-                // 检查当前bag文件是否已经超过1小时
+                // 检查当前bag文件是否已经超过配置的最大时长
                 double current_duration = (ros::Time::now() - bag_start_time_).toSec();
                 if (current_duration >= max_bag_duration_)
                 {
@@ -375,29 +379,48 @@ void ConcurrentRecorder::createNewBag()
     
     auto now = std::chrono::system_clock::now();
     std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-    std::tm* now_tm = std::localtime(&now_time);
+    std::tm now_tm = *std::localtime(&now_time);
     
-    char date_str[9];
-    std::strftime(date_str, sizeof(date_str), "%Y%m%d", now_tm);
+    // 计算结束时间
+    std::time_t end_time = now_time + static_cast<time_t>(max_bag_duration_);
+    std::tm end_tm = *std::localtime(&end_time);
     
-    std::string filename = "recording_" + std::string(date_str) + "_" + 
-                         (now_tm->tm_hour < 10 ? "0" : "") + std::to_string(now_tm->tm_hour) + ".bag";
+    char time_str[20];
+    std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M", &now_tm);
+    
+    char end_str[10];
+    std::strftime(end_str, sizeof(end_str), "_%H%M", &end_tm);
+    
+    std::string filename = "recording_" + std::string(time_str) + end_str + ".bag";
     std::string filepath = base_dir_ + "/" + filename;
+    
+    bool is_new_file = !fs::exists(filepath);
     
     try
     {
-        if (!fs::exists(filepath)) {
+        if(is_new_file)
+        {
             current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Write);
-        } else {
+        }
+        else
+        {
             current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Append);
         }
+        
         bag_start_time_ = ros::Time::now();
         
         // 计算预计结束时间
         double expected_end_time = bag_start_time_.toSec() + max_bag_duration_;
         addRecordingToDB(filename, bag_start_time_.toSec(), expected_end_time, 0);
-        
-        ROS_INFO("Created new bag file: %s", filepath.c_str());
+
+        if(is_new_file)
+        {
+            ROS_INFO("Created new bag file: %s", filepath.c_str());
+        }
+        else
+        {
+            ROS_INFO("Appended to bag file: %s", filepath.c_str());
+        }
     }
     catch (const std::exception& e)
     {
