@@ -10,3 +10,4 @@ playback_topic: "/recordImage"
 # 性能配置
 max_buffer_size: 10485760  # 10MB
 flush_interval: 1.0        # 1秒
+max_bag_duration: 600.0   # bag包最大持续时间，单位秒

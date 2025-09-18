@@ -25,13 +25,22 @@ void signalHandler(int signal)
     ros::shutdown();
 }
 
-ConcurrentRecorder::ConcurrentRecorder() : nh_("~")
+ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), max_bag_duration_(3600.0)  // 默认1小时
 {
     // 加载配置
     std::string config_file;
     nh_.param("config_file", config_file, std::string("config/recorder_config.yaml"));
     loadConfig(config_file);
     
+    // 从配置读取持续时间（如果存在）
+    if (config_.find("max_bag_duration") != config_.end()) {
+        try {
+            max_bag_duration_ = std::stod(config_["max_bag_duration"]);
+            ROS_INFO("Loaded bag duration: %.1f seconds", max_bag_duration_);
+        } catch (...) {
+            ROS_WARN("Invalid max_bag_duration config, using default 3600s");
+        }
+    }
     // 获取数据目录
     nh_.param("data_dir", base_dir_, std::string("/data/ros_recordings"));
     db_path_ = base_dir_ + "/recordings.db";
@@ -200,7 +209,7 @@ void ConcurrentRecorder::bagManagementWorker()
             {
                 // 检查当前bag文件是否已经超过1小时
                 double current_duration = (ros::Time::now() - bag_start_time_).toSec();
-                if (current_duration >= 3600.0) // 1小时
+                if (current_duration >= max_bag_duration_)
                 {
                     closeCurrentBag();
                     createNewBag();
@@ -377,11 +386,11 @@ void ConcurrentRecorder::createNewBag()
     
     try
     {
-        current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Write);
+        current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Append);
         bag_start_time_ = ros::Time::now();
         
-        // 计算预计结束时间（1小时后）
-        double expected_end_time = bag_start_time_.toSec() + 3600.0;
+        // 计算预计结束时间
+        double expected_end_time = bag_start_time_.toSec() + max_bag_duration_;
         addRecordingToDB(filename, bag_start_time_.toSec(), expected_end_time, 0);
         
         ROS_INFO("Created new bag file: %s", filepath.c_str());
@@ -469,11 +478,12 @@ void ConcurrentRecorder::addRecordingToDB(const std::string& filename, double st
 
 void ConcurrentRecorder::loadConfig(const std::string& config_file)
 {
-    try
-    {
-        if (fs::exists(config_file))
-        {
+    try {
+        if (fs::exists(config_file)) {
             YAML::Node config = YAML::LoadFile(config_file);
+            if(config["max_bag_duration"]) {
+                config_["max_bag_duration"] = std::to_string(config["max_bag_duration"].as<double>());
+            }
             config_["compression_quality"] = std::to_string(config["compression_quality"].as<int>(90));
             config_["image_compression_format"] = config["image_compression_format"].as<std::string>("jpeg");
             ROS_INFO("Configuration loaded from: %s", config_file.c_str());

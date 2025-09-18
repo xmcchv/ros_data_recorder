@@ -72,6 +72,7 @@ private:
     std::unique_ptr<rosbag::Bag> current_bag_;
     ros::Time bag_start_time_;
     std::mutex bag_mutex_;
+    double max_bag_duration_;  // bag包最大持续时间
     
     // 配置和路径
     std::string base_dir_;
