@@ -227,7 +227,6 @@ void ConcurrentRecorder::bagManagementWorker()
 
 void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedImage& msg)
 {
-    static int flush_counter = 0;
     std::lock_guard<std::mutex> lock(bag_mutex_);
     
     if (!current_bag_ || !current_bag_->isOpen())
@@ -239,10 +238,6 @@ void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedIm
     {
         ros::Time stamp = msg.header.stamp.sec == 0 ? ros::Time::now() : msg.header.stamp;
         current_bag_->write("/detectImage/compressed", stamp, msg);
-        if (++flush_counter % 10 == 0) 
-        {
-            current_bag_->flush();
-        }
     }
     catch (const std::exception& e)
     {
@@ -409,8 +404,6 @@ void ConcurrentRecorder::createNewBag()
             current_bag_->close();  
         }
         current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Append);
-        
-        current_bag_->flush();
         
         bag_start_time_ = ros::Time::now();
         
