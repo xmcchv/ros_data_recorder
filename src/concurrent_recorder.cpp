@@ -386,7 +386,11 @@ void ConcurrentRecorder::createNewBag()
     
     try
     {
-        current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Append);
+        if (!fs::exists(filepath)) {
+            current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Write);
+        } else {
+            current_bag_ = std::make_unique<rosbag::Bag>(filepath, rosbag::bagmode::Append);
+        }
         bag_start_time_ = ros::Time::now();
         
         // 计算预计结束时间
