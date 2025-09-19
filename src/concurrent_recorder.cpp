@@ -180,25 +180,29 @@ void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedIm
         // 解码压缩图像
         cv::Mat image = cv::imdecode(cv::Mat(msg.data), cv::IMREAD_COLOR);
 
-        // 生成带时间的文件名
-        std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-        std::tm tm = *std::localtime(&now);
-        char filename[256];
-        strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S.jpg", &tm);
+        // 获取当前时间戳（带小数）
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        double timestamp = std::chrono::duration<double>(duration).count();
+
+        // 生成带时间戳的文件名（小数点改为下划线）
+        std::string timestamp_str = std::to_string(timestamp);
+        std::replace(timestamp_str.begin(), timestamp_str.end(), '.', '_');
+        std::string filename = timestamp_str + ".jpg";
+        std::string image_path = base_dir_ + "/" + filename;
 
         // 保存图片
-        std::string image_path = base_dir_ + "/" + filename;
         cv::imwrite(image_path, image);
 
         // 写入数据库
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db_, "INSERT INTO recordings (image_path, timestamp) VALUES (?, ?)", -1, &stmt, NULL);
         sqlite3_bind_text(stmt, 1, image_path.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 2, now);
+        sqlite3_bind_double(stmt, 2, timestamp);  // 使用 bind_double 存储时间戳
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
 
-        // 发布原始图像（保持ROS部分不变）
+        // 发布原始图像
         cv_bridge::CvImage cv_image;
         cv_image.image = image;
         cv_image.encoding = "bgr8";
@@ -230,8 +234,8 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
                         "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC";
 
     if (sqlite3_prepare_v2(db_, query, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int64(stmt, 1, static_cast<int64_t>(start_timestamp));
-        sqlite3_bind_int64(stmt, 2, static_cast<int64_t>(end_timestamp));
+        sqlite3_bind_double(stmt, 1, start_timestamp);  
+        sqlite3_bind_double(stmt, 2, end_timestamp);    
 
         while (sqlite3_step(stmt) == SQLITE_ROW && !stop_threads_ && ros::ok()) {
             if (interrupt_flag) {
@@ -274,7 +278,7 @@ void ConcurrentRecorder::initDatabase() {
             "CREATE TABLE IF NOT EXISTS recordings ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
             "image_path TEXT NOT NULL,"
-            "timestamp DATETIME NOT NULL,"
+            "timestamp REAL NOT NULL," 
             "created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
             ");";
         
@@ -284,7 +288,6 @@ void ConcurrentRecorder::initDatabase() {
             ROS_ERROR("SQL error: %s", err_msg);
             sqlite3_free(err_msg);
         }
-        // sqlite3_close(db_);
     }
 }
 
