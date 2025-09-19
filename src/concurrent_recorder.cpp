@@ -198,15 +198,10 @@ void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedIm
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db_, "INSERT INTO recordings (image_path, timestamp) VALUES (?, ?)", -1, &stmt, NULL);
         sqlite3_bind_text(stmt, 1, image_path.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_double(stmt, 2, timestamp);  // 使用 bind_double 存储时间戳
+        sqlite3_bind_double(stmt, 2, timestamp); 
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
 
-        // 发布原始图像
-        cv_bridge::CvImage cv_image;
-        cv_image.image = image;
-        cv_image.encoding = "bgr8";
-        image_pub_.publish(cv_image.toImageMsg());
     } catch (const std::exception& e) {
         ROS_ERROR("process image failed: %s", e.what());
     }
