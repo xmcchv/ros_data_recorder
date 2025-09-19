@@ -208,7 +208,7 @@ void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedIm
         cv_image.encoding = "bgr8";
         image_pub_.publish(cv_image.toImageMsg());
     } catch (const std::exception& e) {
-        ROS_ERROR("处理图像失败: %s", e.what());
+        ROS_ERROR("process image failed: %s", e.what());
     }
 }
 
@@ -222,7 +222,7 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
             
             std::lock_guard<std::mutex> lock(timestamp_mutex_);
             if (!timestamp_queue_.empty()) {
-                ROS_WARN("检测到新时间戳请求，中断当前回放");
+                ROS_WARN("detect new timestamp request, interrupt current playback");
                 interrupt_flag = true;
                 break;
             }
@@ -241,7 +241,7 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
 
         while (sqlite3_step(stmt) == SQLITE_ROW && !stop_threads_ && ros::ok()) {
             if (interrupt_flag) {
-                ROS_INFO("回放已被中断");
+                ROS_INFO("current playback interrupted");
                 break;
             }
 
@@ -254,14 +254,14 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
     }
 
     // 打印数据库查询结果
-    ROS_INFO("数据库查询完成，找到 %lu 张图片，时间范围: %.6f 到 %.6f", 
+    ROS_INFO("sqlite finish. find %lu images, timestamp: %.6f to %.6f", 
              image_records.size(), start_timestamp, end_timestamp);
 
     // 第二阶段：逐个读取图片并发布话题
     size_t published_count = 0;
     for (const auto& record : image_records) {
         if (interrupt_flag || stop_threads_ || !ros::ok()) {
-            ROS_INFO("回放被中断，已发布 %lu 张图片", published_count);
+            ROS_INFO("current playback interrupted, published %lu images", published_count);
             break;
         }
 
@@ -272,6 +272,7 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
                 cv_bridge::CvImage cv_image;
                 cv_image.image = image;
                 cv_image.encoding = "bgr8";
+                cv_image.header.frame_id = "map";
                 cv_image.header.stamp = ros::Time().fromSec(record.second);
                 image_pub_.publish(cv_image.toImageMsg());
                 published_count++;
@@ -280,14 +281,14 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
                 // 控制发布频率，避免过快
                 ros::Duration(0.01).sleep(); // 10ms间隔
             } else {
-                ROS_WARN("无法读取图片: %s", record.first.c_str());
+                ROS_WARN("failed to read image: %s", record.first.c_str());
             }
         } catch (const std::exception& e) {
-            ROS_ERROR("加载图片失败: %s | 路径: %s", e.what(), record.first.c_str());
+            ROS_ERROR("failed to load image: %s | path: %s", e.what(), record.first.c_str());
         }
     }
 
-    ROS_INFO("回放完成，成功发布 %lu 张图片", published_count);
+    ROS_INFO("current playback finished, published %lu images", published_count);
 
     interrupt_flag = true;
     if (interrupt_checker.joinable()) {
