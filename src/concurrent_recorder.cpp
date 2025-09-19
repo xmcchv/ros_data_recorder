@@ -229,13 +229,15 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
         }
     });
 
+    // 第一阶段：从数据库读取所有符合条件的记录
+    std::vector<std::pair<std::string, double>> image_records;
     sqlite3_stmt* stmt;
     const char* query = "SELECT image_path, timestamp FROM recordings "
                         "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC";
 
     if (sqlite3_prepare_v2(db_, query, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_double(stmt, 1, start_timestamp);  
-        sqlite3_bind_double(stmt, 2, end_timestamp);    
+        sqlite3_bind_double(stmt, 1, start_timestamp);
+        sqlite3_bind_double(stmt, 2, end_timestamp);
 
         while (sqlite3_step(stmt) == SQLITE_ROW && !stop_threads_ && ros::ok()) {
             if (interrupt_flag) {
@@ -244,25 +246,48 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
             }
 
             const char* image_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            int64_t timestamp = sqlite3_column_int64(stmt, 1);
-
-            try {
-                cv::Mat image = cv::imread(image_path, cv::IMREAD_COLOR);
-                if (!image.empty()) {
-                    // 转换为ROS消息并发布
-                    cv_bridge::CvImage cv_image;
-                    cv_image.image = image;
-                    cv_image.encoding = "bgr8";
-                    cv_image.header.stamp = ros::Time().fromSec(timestamp);
-                    image_pub_.publish(cv_image.toImageMsg());
-                    messages_played_++;
-                }
-            } catch (const std::exception& e) {
-                ROS_ERROR("加载图片失败: %s | 路径: %s", e.what(), image_path);
-            }
+            double timestamp = sqlite3_column_double(stmt, 1);
+            
+            image_records.emplace_back(image_path, timestamp);
         }
         sqlite3_finalize(stmt);
     }
+
+    // 打印数据库查询结果
+    ROS_INFO("数据库查询完成，找到 %lu 张图片，时间范围: %.6f 到 %.6f", 
+             image_records.size(), start_timestamp, end_timestamp);
+
+    // 第二阶段：逐个读取图片并发布话题
+    size_t published_count = 0;
+    for (const auto& record : image_records) {
+        if (interrupt_flag || stop_threads_ || !ros::ok()) {
+            ROS_INFO("回放被中断，已发布 %lu 张图片", published_count);
+            break;
+        }
+
+        try {
+            cv::Mat image = cv::imread(record.first, cv::IMREAD_COLOR);
+            if (!image.empty()) {
+                // 转换为ROS消息并发布
+                cv_bridge::CvImage cv_image;
+                cv_image.image = image;
+                cv_image.encoding = "bgr8";
+                cv_image.header.stamp = ros::Time().fromSec(record.second);
+                image_pub_.publish(cv_image.toImageMsg());
+                published_count++;
+                messages_played_++;
+                
+                // 控制发布频率，避免过快
+                ros::Duration(0.01).sleep(); // 10ms间隔
+            } else {
+                ROS_WARN("无法读取图片: %s", record.first.c_str());
+            }
+        } catch (const std::exception& e) {
+            ROS_ERROR("加载图片失败: %s | 路径: %s", e.what(), record.first.c_str());
+        }
+    }
+
+    ROS_INFO("回放完成，成功发布 %lu 张图片", published_count);
 
     interrupt_flag = true;
     if (interrupt_checker.joinable()) {
