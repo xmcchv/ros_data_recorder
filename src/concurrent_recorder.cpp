@@ -263,7 +263,6 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
         try {
             cv::Mat image = cv::imread(record.first, cv::IMREAD_COLOR);
             if (!image.empty()) {
-                // 转换为ROS消息并发布
                 cv_bridge::CvImage cv_image;
                 cv_image.image = image;
                 cv_image.encoding = "bgr8";
@@ -273,8 +272,7 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
                 published_count++;
                 messages_played_++;
                 
-                // 控制发布频率，避免过快
-                ros::Duration(0.01).sleep(); // 10ms间隔
+                ros::Duration(0.15).sleep(); // 10ms间隔
             } else {
                 ROS_WARN("failed to read image: %s", record.first.c_str());
             }
