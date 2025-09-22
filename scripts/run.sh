@@ -10,7 +10,7 @@ cd $ROOT_DIR/../../
 
 if catkin_make -j8;then
     source devel/setup.bash
-    roslaunch ros_data_recorder run.launch
+    roslaunch ros_data_recorder run.launch test_recorder:=false
 fi
 
 

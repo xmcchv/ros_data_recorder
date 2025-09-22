@@ -38,8 +38,8 @@ public:
     {
         auto current_time = std::chrono::system_clock::now().time_since_epoch().count() / 1e9;
         
-        double start_timestamp = current_time - 50.0;
-        double end_timestamp = current_time - 30.0;
+        double start_timestamp = current_time - 350.0;
+        double end_timestamp = current_time - 330.0;
         
         std_msgs::Float64MultiArray timestamp_msg;
         timestamp_msg.data = {start_timestamp, end_timestamp};

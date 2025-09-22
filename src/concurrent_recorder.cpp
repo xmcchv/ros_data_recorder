@@ -25,7 +25,7 @@ void signalHandler(int signal)
     ros::shutdown();
 }
 
-ConcurrentRecorder::ConcurrentRecorder() : nh_("~")
+ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), db_(nullptr)
 {
     // 加载配置
     std::string config_file;
@@ -56,6 +56,10 @@ ConcurrentRecorder::ConcurrentRecorder() : nh_("~")
     nh_.param("image_topic", image_topic, std::string("/detectImage/compressed"));
     image_sub_ = nh_.subscribe(image_topic, 100, &ConcurrentRecorder::imageCallback, this);
     
+    // 设置视频参数
+    fps_ = 30.0; // 默认帧率
+    segment_duration_ = 300; // 默认5分钟分段
+    
     // 启动工作线程
     recording_thread_ = std::thread(&ConcurrentRecorder::recordingWorker, this);
     playback_thread_ = std::thread(&ConcurrentRecorder::playbackWorker, this);
@@ -76,7 +80,14 @@ void ConcurrentRecorder::stop()
     if (recording_thread_.joinable()) recording_thread_.join();
     if (playback_thread_.joinable()) playback_thread_.join();
 
-    sqlite3_close(db_);
+    // 确保当前视频段被正确关闭
+    if (video_writer_.isOpened()) {
+        finalizeCurrentVideoSegment(ros::Time::now().toSec());
+    }
+
+    if (db_) {
+        sqlite3_close(db_);
+    }
     
     ROS_INFO("Recorder stopped. Recorded %lu messages, played %lu messages.", 
              messages_recorded_.load(), messages_played_.load());
@@ -119,11 +130,56 @@ void ConcurrentRecorder::timestampCallback(const std_msgs::Float64MultiArray::Co
 
 void ConcurrentRecorder::imageCallback(const sensor_msgs::CompressedImage::ConstPtr& msg)
 {
-    if (is_recording_)
-    {
-        std::lock_guard<std::mutex> lock(image_mutex_);
-        image_queue_.push(*msg);
-        image_cv_.notify_one();
+    if (!is_recording_) {
+        // 开始录制
+        is_recording_ = true;
+        double timestamp = msg->header.stamp.toSec();
+        startNewVideoSegment(timestamp);
+    }
+    
+    std::lock_guard<std::mutex> lock(image_mutex_);
+    image_queue_.push(*msg);
+    image_cv_.notify_one();
+}
+
+void ConcurrentRecorder::startNewVideoSegment(double start_timestamp)
+{
+    // 生成视频文件名
+    std::time_t t = static_cast<std::time_t>(start_timestamp);
+    std::tm* tm = std::localtime(&t);
+    char filename[100];
+    std::strftime(filename, sizeof(filename), "%Y%m%d_%H%M%S", tm);
+    
+    current_video_path_ = base_dir_ + "/" + std::string(filename) + ".mp4";
+    current_segment_start_time_ = start_timestamp;
+    current_segment_frame_count_ = 0;
+    
+    ROS_INFO("Starting new video segment: %s", current_video_path_.c_str());
+}
+
+void ConcurrentRecorder::finalizeCurrentVideoSegment(double end_timestamp)
+{
+    if (video_writer_.isOpened()) {
+        video_writer_.release();
+        
+        // 记录到数据库
+        sqlite3_stmt* stmt;
+        const char* sql = "INSERT INTO video_segments (video_path, start_time, end_time, frame_count) VALUES (?, ?, ?, ?)";
+        
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, current_video_path_.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_double(stmt, 2, current_segment_start_time_);
+            sqlite3_bind_double(stmt, 3, end_timestamp);
+            sqlite3_bind_int(stmt, 4, current_segment_frame_count_);
+            
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                ROS_ERROR("Failed to insert video segment into database: %s", sqlite3_errmsg(db_));
+            }
+            
+            sqlite3_finalize(stmt);
+        }
+        
+        ROS_INFO("Finalized video segment: %s (frames: %d)", current_video_path_.c_str(), current_segment_frame_count_);
     }
 }
 
@@ -149,6 +205,11 @@ void ConcurrentRecorder::recordingWorker()
         
         processRecordingMessage(msg);
         messages_recorded_++;
+    }
+    
+    // 确保最后一段视频被正确关闭
+    if (video_writer_.isOpened()) {
+        finalizeCurrentVideoSegment(ros::Time::now().toSec());
     }
 }
 
@@ -179,31 +240,42 @@ void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedIm
     try {
         // 解码压缩图像
         cv::Mat image = cv::imdecode(cv::Mat(msg.data), cv::IMREAD_COLOR);
-
-        // 获取当前时间戳（带小数）
-        auto now = std::chrono::system_clock::now();
-        auto duration = now.time_since_epoch();
-        double timestamp = std::chrono::duration<double>(duration).count();
-
-        // 生成带时间戳的文件名（小数点改为下划线）
-        std::string timestamp_str = std::to_string(timestamp);
-        std::replace(timestamp_str.begin(), timestamp_str.end(), '.', '_');
-        std::string filename = timestamp_str + ".jpg";
-        std::string image_path = base_dir_ + "/" + filename;
-
-        // 保存图片
-        cv::imwrite(image_path, image);
-
-        // 写入数据库
-        sqlite3_stmt* stmt;
-        sqlite3_prepare_v2(db_, "INSERT INTO recordings (image_path, timestamp) VALUES (?, ?)", -1, &stmt, NULL);
-        sqlite3_bind_text(stmt, 1, image_path.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_double(stmt, 2, timestamp); 
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-
+        
+        if (image.empty()) {
+            ROS_WARN("Failed to decode image");
+            return;
+        }
+        
+        double timestamp = msg.header.stamp.toSec();
+        
+        // 检查是否需要创建新的视频段
+        if (!video_writer_.isOpened() || 
+            (timestamp - current_segment_start_time_ > segment_duration_)) {
+            
+            if (video_writer_.isOpened()) {
+                finalizeCurrentVideoSegment(timestamp);
+            }
+            
+            startNewVideoSegment(timestamp);
+            
+            // 初始化视频写入器
+            frame_size_ = image.size();
+            int fourcc = cv::VideoWriter::fourcc('H', '2', '6', '4'); // H.264编码
+            video_writer_.open(current_video_path_, fourcc, fps_, frame_size_, true);
+            
+            if (!video_writer_.isOpened()) {
+                ROS_ERROR("Failed to open video writer for path: %s", current_video_path_.c_str());
+                return;
+            }
+        }
+        
+        // 写入视频帧
+        video_writer_.write(image);
+        current_segment_frame_count_++;
+        current_segment_end_time_ = timestamp;
+        
     } catch (const std::exception& e) {
-        ROS_ERROR("process image failed: %s", e.what());
+        ROS_ERROR("Process image failed: %s", e.what());
     }
 }
 
@@ -217,71 +289,117 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
             
             std::lock_guard<std::mutex> lock(timestamp_mutex_);
             if (!timestamp_queue_.empty()) {
-                ROS_WARN("detect new timestamp request, interrupt current playback");
+                ROS_WARN("Detect new timestamp request, interrupt current playback");
                 interrupt_flag = true;
                 break;
             }
         }
     });
 
-    // 第一阶段：从数据库读取所有符合条件的记录
-    std::vector<std::pair<std::string, double>> image_records;
+    // 从数据库查询符合条件的视频段
+    std::vector<std::tuple<std::string, double, double>> video_segments;
     sqlite3_stmt* stmt;
-    const char* query = "SELECT image_path, timestamp FROM recordings "
-                        "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC";
+    const char* query = "SELECT video_path, start_time, end_time FROM video_segments "
+                        "WHERE start_time <= ? AND end_time >= ? ORDER BY start_time ASC";
 
     if (sqlite3_prepare_v2(db_, query, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_double(stmt, 1, start_timestamp);
-        sqlite3_bind_double(stmt, 2, end_timestamp);
+        sqlite3_bind_double(stmt, 1, end_timestamp);
+        sqlite3_bind_double(stmt, 2, start_timestamp);
 
         while (sqlite3_step(stmt) == SQLITE_ROW && !stop_threads_ && ros::ok()) {
             if (interrupt_flag) {
-                ROS_INFO("current playback interrupted");
+                ROS_INFO("Current playback interrupted");
                 break;
             }
 
-            const char* image_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            double timestamp = sqlite3_column_double(stmt, 1);
+            const char* video_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            double seg_start = sqlite3_column_double(stmt, 1);
+            double seg_end = sqlite3_column_double(stmt, 2);
             
-            image_records.emplace_back(image_path, timestamp);
+            video_segments.emplace_back(video_path, seg_start, seg_end);
         }
         sqlite3_finalize(stmt);
     }
 
-    // 打印数据库查询结果
-    ROS_INFO("sqlite finish. find %lu images, timestamp: %.6f to %.6f", 
-             image_records.size(), start_timestamp, end_timestamp);
+    ROS_INFO("Found %lu video segments for time range %.6f to %.6f", 
+             video_segments.size(), start_timestamp, end_timestamp);
 
-    // 第二阶段：逐个读取图片并发布话题
+    // 处理每个视频段
     size_t published_count = 0;
-    for (const auto& record : image_records) {
+    for (const auto& segment : video_segments) {
         if (interrupt_flag || stop_threads_ || !ros::ok()) {
-            ROS_INFO("current playback interrupted, published %lu images", published_count);
+            ROS_INFO("Playback interrupted, published %lu frames", published_count);
             break;
         }
 
-        try {
-            cv::Mat image = cv::imread(record.first, cv::IMREAD_COLOR);
-            if (!image.empty()) {
-                cv_bridge::CvImage cv_image;
-                cv_image.image = image;
-                cv_image.encoding = "bgr8";
-                cv_image.header.frame_id = "map";
-                cv_image.header.stamp = ros::Time().fromSec(record.second);
-                image_pub_.publish(cv_image.toImageMsg());
-                published_count++;
-                messages_played_++;
-                
-                ros::Duration(0.15).sleep(); // 10ms间隔
-            } else {
-                ROS_WARN("failed to read image: %s", record.first.c_str());
-            }
-        } catch (const std::exception& e) {
-            ROS_ERROR("failed to load image: %s | path: %s", e.what(), record.first.c_str());
+        std::string video_path = std::get<0>(segment);
+        double seg_start = std::get<1>(segment);
+        double seg_end = std::get<2>(segment);
+        
+        // 打开视频文件
+        cv::VideoCapture cap(video_path);
+        if (!cap.isOpened()) {
+            ROS_WARN("Failed to open video: %s", video_path.c_str());
+            continue;
         }
+        
+        // 计算需要提取的帧范围
+        double video_duration = seg_end - seg_start;
+        double video_fps = cap.get(cv::CAP_PROP_FPS);
+        int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+        
+        // 计算起始和结束帧
+        int start_frame = 0;
+        int end_frame = total_frames - 1;
+        
+        if (start_timestamp > seg_start) {
+            double offset = start_timestamp - seg_start;
+            start_frame = static_cast<int>(offset * video_fps);
+        }
+        
+        if (end_timestamp < seg_end) {
+            double offset = end_timestamp - seg_start;
+            end_frame = static_cast<int>(offset * video_fps);
+        }
+
+        ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f", 
+                 video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp);
+        
+        // 设置起始帧
+        cap.set(cv::CAP_PROP_POS_FRAMES, start_frame);
+        
+        // 读取并发布帧
+        cv::Mat frame;
+        int current_frame = start_frame;
+        
+        while (cap.read(frame) && current_frame <= end_frame) {
+            if (interrupt_flag || stop_threads_ || !ros::ok()) {
+                break;
+            }
+            
+            // 计算当前帧的时间戳
+            double frame_time = seg_start + (current_frame / video_fps);
+            
+            // 发布图像
+            cv_bridge::CvImage cv_image;
+            cv_image.image = frame;
+            cv_image.encoding = "bgr8";
+            cv_image.header.frame_id = "map";
+            cv_image.header.stamp = ros::Time().fromSec(frame_time);
+            image_pub_.publish(cv_image.toImageMsg());
+            
+            published_count++;
+            messages_played_++;
+            
+            // 控制播放速度
+            ros::Duration(1.0 / video_fps).sleep();
+            current_frame++;
+        }
+        
+        cap.release();
     }
 
-    ROS_INFO("current playback finished, published %lu images", published_count);
+    ROS_INFO("Playback finished, published %lu frames", published_count);
 
     interrupt_flag = true;
     if (interrupt_checker.joinable()) {
@@ -289,48 +407,70 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
     }
 }
 
-
 void ConcurrentRecorder::initDatabase() {
-    if (sqlite3_open(db_path_.c_str(), &db_) == SQLITE_OK)
-    {
-        const char* create_table = 
-            "CREATE TABLE IF NOT EXISTS recordings ("
+    if (sqlite3_open(db_path_.c_str(), &db_) == SQLITE_OK) {
+        // 创建视频段表
+        const char* create_video_table = 
+            "CREATE TABLE IF NOT EXISTS video_segments ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "image_path TEXT NOT NULL,"
-            "timestamp REAL NOT NULL," 
+            "video_path TEXT NOT NULL UNIQUE,"
+            "start_time REAL NOT NULL,"
+            "end_time REAL NOT NULL,"
+            "frame_count INTEGER NOT NULL,"
             "created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
             ");";
         
         char* err_msg = nullptr;
-        if (sqlite3_exec(db_, create_table, nullptr, nullptr, &err_msg) != SQLITE_OK)
-        {
+        if (sqlite3_exec(db_, create_video_table, nullptr, nullptr, &err_msg) != SQLITE_OK) {
             ROS_ERROR("SQL error: %s", err_msg);
             sqlite3_free(err_msg);
         }
+        
+        // 创建索引以提高查询性能
+        const char* create_index = 
+            "CREATE INDEX IF NOT EXISTS idx_time_range ON video_segments (start_time, end_time)";
+        
+        if (sqlite3_exec(db_, create_index, nullptr, nullptr, &err_msg) != SQLITE_OK) {
+            ROS_ERROR("SQL error: %s", err_msg);
+            sqlite3_free(err_msg);
+        }
+        
+        ROS_INFO("Database initialized successfully");
+    } else {
+        ROS_ERROR("Failed to open database: %s", sqlite3_errmsg(db_));
     }
 }
 
-
-void ConcurrentRecorder::loadConfig(const std::string& config_file)
-{
+void ConcurrentRecorder::loadConfig(const std::string& config_file) {
     try {
         if (fs::exists(config_file)) {
             YAML::Node config = YAML::LoadFile(config_file);
-            if(config["max_bag_duration"]) {
-                config_["max_bag_duration"] = std::to_string(config["max_bag_duration"].as<double>());
+            
+            if (config["fps"]) {
+                fps_ = config["fps"].as<double>();
             }
-            config_["compression_quality"] = std::to_string(config["compression_quality"].as<int>(90));
-            config_["image_compression_format"] = config["image_compression_format"].as<std::string>("jpeg");
+            
+            if (config["segment_duration"]) {
+                segment_duration_ = config["segment_duration"].as<int>();
+            }
+            
+            if (config["compression_quality"]) {
+                config_["compression_quality"] = std::to_string(config["compression_quality"].as<int>());
+            }
+            
+            if (config["image_compression_format"]) {
+                config_["image_compression_format"] = config["image_compression_format"].as<std::string>();
+            }
+            
             ROS_INFO("Configuration loaded from: %s", config_file.c_str());
-        }
-        else
-        {
+            ROS_INFO("FPS: %.2f, Segment Duration: %d seconds", fps_, segment_duration_);
+        } else {
             throw std::runtime_error("Config file not found");
         }
-    }
-    catch (const std::exception& e)
-    {
+    } catch (const std::exception& e) {
         ROS_WARN("Failed to load config: %s. Using default settings.", e.what());
+        fps_ = 30.0;
+        segment_duration_ = 300; // 5分钟
         config_["compression_quality"] = "90";
         config_["image_compression_format"] = "jpeg";
     }
