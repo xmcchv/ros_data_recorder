@@ -344,42 +344,89 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
         }
         
         // 计算需要提取的帧范围
-        double video_duration = seg_end - seg_start;
         double video_fps = cap.get(cv::CAP_PROP_FPS);
-        int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
-        
-        // 计算起始和结束帧
-        int start_frame = 0;
-        int end_frame = total_frames - 1;
-        
-        if (start_timestamp > seg_start) {
-            double offset = start_timestamp - seg_start;
-            start_frame = static_cast<int>(offset * video_fps);
-        }
-        
-        if (end_timestamp < seg_end) {
-            double offset = end_timestamp - seg_start;
-            end_frame = static_cast<int>(offset * video_fps);
+        if (video_fps <= 0) {
+            ROS_WARN("Invalid FPS for video: %s", video_path.c_str());
+            cap.release();
+            continue;
         }
 
-        ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f", 
-                 video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp);
+        // 计算起始和结束帧
+        int start_frame = 0;
+        int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+        int end_frame = total_frames - 1;
+
+        // 确保视频段确实包含请求的时间范围
+        if (start_timestamp > seg_end || end_timestamp < seg_start) {
+            ROS_WARN("Video segment doesn't contain requested time range: %s", video_path.c_str());
+            cap.release();
+            continue;
+        }
+
+        // 计算起始帧
+        if (start_timestamp > seg_start) {
+            double offset = start_timestamp - seg_start;
+            start_frame = static_cast<int>(std::round(offset * video_fps));
+        }
+
+        // 计算结束帧
+        if (end_timestamp < seg_end) {
+            double offset = end_timestamp - seg_start;
+            end_frame = static_cast<int>(std::round(offset * video_fps));
+        } else {
+            end_frame = total_frames - 1;
+        }
+
+        // 确保帧号在有效范围内
+        start_frame = std::max(0, std::min(start_frame, total_frames - 1));
+        end_frame = std::max(0, std::min(end_frame, total_frames - 1));
+
+        ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f seg_start: %.6f seg_end: %.6f", 
+                        video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp, seg_start, seg_end);
+        // 检查有效性
+        if (start_frame > end_frame) {
+            ROS_WARN("Invalid frame range: start_frame(%d) > end_frame(%d) for video: %s", 
+                    start_frame, end_frame, video_path.c_str());
+            ROS_WARN("Requested time range: %.6f to %.6f", start_timestamp, end_timestamp);
+            ROS_WARN("Video segment time range: %.6f to %.6f", seg_start, seg_end);
+            cap.release();
+            continue;
+        }
+
         
         // 设置起始帧
-        cap.set(cv::CAP_PROP_POS_FRAMES, start_frame);
+        if (!cap.set(cv::CAP_PROP_POS_FRAMES, start_frame)) {
+            ROS_WARN("Can't locate start frame: %d, trying to seek to beginning", start_frame);
+            // 如果设置特定帧失败，尝试重置到开头
+            cap.set(cv::CAP_PROP_POS_FRAMES, 0);
+            // 跳过前面的帧
+            for (int i = 0; i < start_frame; i++) {
+                cv::Mat dummy;
+                if (!cap.read(dummy)) {
+                    ROS_ERROR("Failed to skip frame %d", i);
+                    break;
+                }
+            }
+        }
         
         // 读取并发布帧
         cv::Mat frame;
         int current_frame = start_frame;
         
-        while (cap.read(frame) && current_frame <= end_frame) {
+        while (current_frame <= end_frame) {
             if (interrupt_flag || stop_threads_ || !ros::ok()) {
                 break;
             }
             
+            // 读取帧
+            if (!cap.read(frame) || frame.empty()) {
+                ROS_ERROR("Failed to read frame %d/%d", current_frame, end_frame);
+                break;
+            }
+
             // 计算当前帧的时间戳
             double frame_time = seg_start + (current_frame / video_fps);
-            
+            ROS_INFO("Publishing frame %d at timestamp %.6f", current_frame, frame_time);
             // 发布图像
             cv_bridge::CvImage cv_image;
             cv_image.image = frame;
