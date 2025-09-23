@@ -15,4 +15,4 @@ fps: 10.0                    # 视频帧率，默认30帧
 segment_duration: 300        # 视频分段时长(秒)，默认5分钟
 compression_quality: 90      # 压缩质量(0-100)
 image_compression_format: jpeg  # 图像压缩格式
-
+max_video_duration: 21600    # 最大视频时长(秒)，默认6小时

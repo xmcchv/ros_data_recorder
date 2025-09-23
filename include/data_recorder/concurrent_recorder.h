@@ -37,6 +37,7 @@ private:
     void imageCallback(const sensor_msgs::CompressedImage::ConstPtr& msg);
     void recordingWorker();
     void playbackWorker();
+    void dbMaintainWorker();
     void processRecordingMessage(const sensor_msgs::CompressedImage& msg);
     void playbackFromBag(double start_timestamp, double end_timestamp);
     void startNewVideoSegment(double start_timestamp);
@@ -49,6 +50,7 @@ private:
     
     std::thread recording_thread_;
     std::thread playback_thread_;
+    std::thread db_maintain_thread_;
     
     std::queue<sensor_msgs::CompressedImage> image_queue_;
     std::mutex image_mutex_;
@@ -77,6 +79,8 @@ private:
     cv::Size frame_size_;
     double fps_;
     int segment_duration_; // 视频分段时长（秒）
+
+    int max_video_duration_; // 最大视频时长（秒）
 };
 
 #endif // CONCURRENT_RECORDER_H

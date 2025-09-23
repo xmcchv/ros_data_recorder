@@ -63,6 +63,7 @@ ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), db_(nullptr)
     // 启动工作线程
     recording_thread_ = std::thread(&ConcurrentRecorder::recordingWorker, this);
     playback_thread_ = std::thread(&ConcurrentRecorder::playbackWorker, this);
+    db_maintain_thread_ = std::thread(&ConcurrentRecorder::dbMaintainWorker, this);
     
     ROS_INFO("Concurrent recorder initialized with data directory: %s", base_dir_.c_str());
 }
@@ -79,6 +80,7 @@ void ConcurrentRecorder::stop()
     
     if (recording_thread_.joinable()) recording_thread_.join();
     if (playback_thread_.joinable()) playback_thread_.join();
+    if (db_maintain_thread_.joinable()) db_maintain_thread_.join();
 
     // 确保当前视频段被正确关闭
     if (video_writer_.isOpened()) {
@@ -454,6 +456,64 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
     }
 }
 
+void ConcurrentRecorder::dbMaintainWorker()
+{
+    ROS_INFO("Database maintain worker started");
+    
+    while (!stop_threads_ && !g_shutdown_requested && ros::ok())
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(600));
+        // 查询旧视频记录，时间超过当前时间-max_video_duration_的视频段
+        const char* select_old_segments = 
+            "SELECT id, video_path, start_time, end_time FROM video_segments "
+            "WHERE end_time < ?";
+        // 执行查询
+        std::vector<std::tuple<std::string, double, double>> old_segments;
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db_, select_old_segments, -1, &stmt, nullptr) == SQLITE_OK) {
+            double threshold = ros::Time::now().toSec() - max_video_duration_;
+            sqlite3_bind_double(stmt, 1, threshold);
+            
+            
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                std::string video_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                double start_time = sqlite3_column_double(stmt, 2);
+                double end_time = sqlite3_column_double(stmt, 3);
+                old_segments.emplace_back(video_path, start_time, end_time);
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        // 根据视频路径删除旧的视频文件
+        for (const auto& [video_path, start_time, end_time] : old_segments) {
+            if (fs::exists(video_path)) {
+                fs::remove(video_path);
+                ROS_INFO("Deleted old video file: %s", video_path.c_str());
+            }
+        }
+
+        // 清理旧的视频段记录
+        const char* delete_old_segments = 
+            "DELETE FROM video_segments WHERE end_time < ?";
+        // sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(db_, delete_old_segments, -1, &stmt, nullptr) == SQLITE_OK) {
+            double threshold = ros::Time::now().toSec() - max_video_duration_;
+            sqlite3_bind_double(stmt, 1, threshold);
+            
+            if (sqlite3_step(stmt) == SQLITE_DONE) {
+                ROS_INFO("Cleaned up %d old video segments", sqlite3_changes(db_));
+            } else {
+                ROS_ERROR("Failed to clean up old video segments: %s", sqlite3_errmsg(db_));
+            }
+            
+            sqlite3_finalize(stmt);
+        }
+
+
+    }
+
+}
+
 void ConcurrentRecorder::initDatabase() {
     if (sqlite3_open(db_path_.c_str(), &db_) == SQLITE_OK) {
         // 创建视频段表
@@ -508,9 +568,13 @@ void ConcurrentRecorder::loadConfig(const std::string& config_file) {
             if (config["image_compression_format"]) {
                 config_["image_compression_format"] = config["image_compression_format"].as<std::string>();
             }
+
+            if (config["max_video_duration"]) {
+                max_video_duration_ = config["max_video_duration"].as<int>();
+            }
             
             ROS_INFO("Configuration loaded from: %s", config_file.c_str());
-            ROS_INFO("FPS: %.2f, Segment Duration: %d seconds", fps_, segment_duration_);
+            ROS_INFO("FPS: %.2f, Segment Duration: %d seconds, Max Video Duration: %d seconds", fps_, segment_duration_, max_video_duration_);
         } else {
             throw std::runtime_error("Config file not found");
         }
