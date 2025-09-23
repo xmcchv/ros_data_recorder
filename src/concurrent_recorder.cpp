@@ -358,38 +358,47 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
         int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
         int end_frame = total_frames - 1;
 
-        // 确保视频段确实包含请求的时间范围
-        if (start_timestamp > seg_end || end_timestamp < seg_start) {
+        // 检查时间范围是否有重叠（修改比较逻辑）
+        if (start_timestamp >= seg_end || end_timestamp <= seg_start) {
             ROS_WARN("Video segment doesn't contain requested time range: %s", video_path.c_str());
             cap.release();
             continue;
         }
 
-        // 计算起始帧
+        // 计算起始帧（使用round提高精度）
         if (start_timestamp > seg_start) {
-            double offset = start_timestamp - seg_start;
-            start_frame = static_cast<int>(std::floor(offset * video_fps));
+            double offset = std::max(0.0, start_timestamp - seg_start);
+            start_frame = static_cast<int>(std::round(offset * video_fps));
         }
 
-        // 计算结束帧
+        // 计算结束帧（使用round提高精度）
         if (end_timestamp < seg_end) {
             double offset = end_timestamp - seg_start;
-            end_frame = static_cast<int>(std::ceil(offset * video_fps));
+            end_frame = static_cast<int>(std::round(offset * video_fps));
         } else {
             end_frame = total_frames - 1;
         }
 
-        // 增加时间范围校验
-        if (end_timestamp - start_timestamp < 1.0/video_fps) {
-            end_frame = start_frame + 1;
-        }
+        // 增加调试信息，查看中间计算结果
+        ROS_INFO("Intermediate calcs - offset_start: %.6f, offset_end: %.6f, frame_start: %d, frame_end: %d", 
+                (start_timestamp - seg_start), (end_timestamp - seg_start), start_frame, end_frame);
 
-        // 确保帧号在有效范围内
+        // 确保帧范围有效且合理
         start_frame = std::clamp(start_frame, 0, total_frames-1);
         end_frame = std::clamp(end_frame, start_frame, total_frames-1);
 
+        // 如果帧数相同，强制至少一帧差异
+        if (start_frame == end_frame) {
+            if (end_frame < total_frames - 1) {
+                end_frame = start_frame + 1;
+            } else if (start_frame > 0) {
+                start_frame = end_frame - 1;
+            }
+            ROS_WARN("Adjusted frame range to avoid identical start/end frames");
+        }
+
         ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f seg_start: %.6f seg_end: %.6f", 
-                        video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp, seg_start, seg_end);
+                video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp, seg_start, seg_end);
         // 检查有效性
         if (start_frame > end_frame) {
             ROS_WARN("Invalid frame range: start_frame(%d) > end_frame(%d) for video: %s", 
