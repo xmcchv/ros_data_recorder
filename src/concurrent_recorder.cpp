@@ -56,10 +56,6 @@ ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), db_(nullptr)
     nh_.param("image_topic", image_topic, std::string("/detectImage/compressed"));
     image_sub_ = nh_.subscribe(image_topic, 100, &ConcurrentRecorder::imageCallback, this);
     
-    // 设置视频参数
-    fps_ = 30.0; // 默认帧率
-    segment_duration_ = 300; // 默认5分钟分段
-    
     // 启动工作线程
     recording_thread_ = std::thread(&ConcurrentRecorder::recordingWorker, this);
     playback_thread_ = std::thread(&ConcurrentRecorder::playbackWorker, this);
@@ -345,26 +341,21 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
             continue;
         }
         
-        // 计算需要提取的帧范围
-        double video_fps = cap.get(cv::CAP_PROP_FPS);
+        // 获取视频参数
+        double video_fps = fps_; // 使用配置的FPS
+        int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+        
         if (video_fps <= 0) {
-            ROS_WARN("Invalid FPS for video: %s", video_path.c_str());
-            cap.release();
-            continue;
+            ROS_WARN("Invalid FPS for video: %s, using configured FPS: %.2f", video_path.c_str(), fps_);
+            video_fps = fps_;
         }
 
-        // 计算起始和结束帧
-        int start_frame = 0;
-        int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
-        int end_frame = total_frames - 1;
-
-        // 获取视频实际时长（基于帧数和fps）
-        double video_duration = total_frames / video_fps;
-        double seg_actual_duration = video_duration; // 视频实际时长
-        double seg_claimed_duration = seg_end - seg_start; // 时间戳声称的时长
-
-        ROS_INFO("Video info - total_frames: %d, fps: %.2f, actual_duration: %.2fs, claimed_duration: %.2fs", 
-                total_frames, video_fps, seg_actual_duration, seg_claimed_duration);
+        // 计算视频的实际持续时间（基于帧数和FPS）
+        double video_actual_duration = total_frames / video_fps;
+        double seg_recorded_duration = seg_end - seg_start; // 数据库记录的时间段
+        
+        ROS_INFO("Video info - total_frames: %d, fps: %.2f, actual_duration: %.2fs, recorded_duration: %.2fs", 
+                total_frames, video_fps, video_actual_duration, seg_recorded_duration);
 
         // 检查时间范围是否有重叠
         if (start_timestamp >= seg_end || end_timestamp <= seg_start) {
@@ -373,52 +364,39 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
             continue;
         }
 
-        // 重新计算时间映射（基于视频实际时长）
-        double actual_seg_start = seg_start; // 可以根据需要调整
-        double actual_seg_end = actual_seg_start + seg_actual_duration;
-
-        // 如果声称的时长与实际时长差异很大，使用实际时长
-        if (std::abs(seg_claimed_duration - seg_actual_duration) > 1.0) {
-            ROS_WARN("Claimed duration (%.2fs) differs significantly from actual duration (%.2fs), using actual duration", 
-                    seg_claimed_duration, seg_actual_duration);
-            actual_seg_end = actual_seg_start + seg_actual_duration;
-        }
-
-        // 计算相对于实际开始时间的偏移
-        double start_offset = std::max(0.0, start_timestamp - actual_seg_start);
-        double end_offset = std::min(seg_actual_duration, end_timestamp - actual_seg_start);
-
-        // 计算帧号
-        start_frame = static_cast<int>(std::round(start_offset * video_fps));
-        end_frame = static_cast<int>(std::round(end_offset * video_fps));
-
+        // 关键修改：基于数据库记录的时间段来计算帧映射
+        // 计算请求的时间段在视频段中的相对位置
+        double relative_start = (start_timestamp - seg_start) / seg_recorded_duration;
+        double relative_end = (end_timestamp - seg_start) / seg_recorded_duration;
+        
+        // 将相对位置映射到帧号
+        int start_frame = static_cast<int>(std::round(relative_start * total_frames));
+        int end_frame = static_cast<int>(std::round(relative_end * total_frames));
+        
         // 确保帧号有效
-        start_frame = std::clamp(start_frame, 0, total_frames-1);
-        end_frame = std::clamp(end_frame, start_frame, total_frames-1);
-
+        start_frame = std::clamp(start_frame, 0, total_frames - 1);
+        end_frame = std::clamp(end_frame, start_frame, total_frames - 1);
+        
         // 如果时间范围太短，确保至少有一帧
         if (end_frame <= start_frame) {
-            if (total_frames > 1) {
-                end_frame = std::min(start_frame + 1, total_frames-1);
-            }
+            end_frame = std::min(start_frame + 1, total_frames - 1);
         }
 
-        ROS_INFO("Final frames - start_frame: %d, end_frame: %d, frame_count: %d", 
+        ROS_INFO("Time mapping - relative_start: %.3f, relative_end: %.3f", relative_start, relative_end);
+        ROS_INFO("Frame range - start_frame: %d, end_frame: %d, frame_count: %d", 
                 start_frame, end_frame, end_frame - start_frame + 1);
 
-        ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f seg_start: %.6f seg_end: %.6f", 
+        ROS_INFO("Playing video segment: %s, frames %d-%d for time range %.6f to %.6f (segment: %.6f to %.6f)", 
                 video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp, seg_start, seg_end);
+
         // 检查有效性
         if (start_frame > end_frame) {
             ROS_WARN("Invalid frame range: start_frame(%d) > end_frame(%d) for video: %s", 
                     start_frame, end_frame, video_path.c_str());
-            ROS_WARN("Requested time range: %.6f to %.6f", start_timestamp, end_timestamp);
-            ROS_WARN("Video segment time range: %.6f to %.6f", seg_start, seg_end);
             cap.release();
             continue;
         }
 
-        
         // 设置起始帧
         if (!cap.set(cv::CAP_PROP_POS_FRAMES, start_frame)) {
             ROS_WARN("Can't locate start frame: %d, trying to seek to beginning", start_frame);
@@ -449,9 +427,15 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
                 break;
             }
 
-            // 计算当前帧的时间戳
-            double frame_time = seg_start + (current_frame / video_fps);
-            ROS_INFO("Publishing frame %d at timestamp %.6f", current_frame, frame_time);
+            // 关键修改：基于数据库时间戳计算当前帧的时间戳
+            // 使用线性插值将帧号映射回实际时间戳
+            double frame_relative_position = static_cast<double>(current_frame - start_frame) / 
+                                           (end_frame - start_frame);
+            double frame_time = start_timestamp + frame_relative_position * (end_timestamp - start_timestamp);
+            
+            ROS_INFO("Publishing frame %d at timestamp %.6f (relative: %.3f)", 
+                    current_frame, frame_time, frame_relative_position);
+            
             // 发布图像
             cv_bridge::CvImage cv_image;
             cv_image.image = frame;
