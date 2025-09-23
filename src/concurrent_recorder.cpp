@@ -262,7 +262,7 @@ void ConcurrentRecorder::processRecordingMessage(const sensor_msgs::CompressedIm
             
             // 初始化视频写入器
             frame_size_ = image.size();
-            int fourcc = cv::VideoWriter::fourcc('H', '2', '6', '4'); // H.264编码
+            int fourcc = cv::VideoWriter::fourcc('A', 'V', 'C', '1'); // H.264编码
             video_writer_.open(current_video_path_, fourcc, fps_, frame_size_, true);
             
             if (!video_writer_.isOpened()) {
@@ -358,44 +358,53 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
         int total_frames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
         int end_frame = total_frames - 1;
 
-        // 检查时间范围是否有重叠（修改比较逻辑）
+        // 获取视频实际时长（基于帧数和fps）
+        double video_duration = total_frames / video_fps;
+        double seg_actual_duration = video_duration; // 视频实际时长
+        double seg_claimed_duration = seg_end - seg_start; // 时间戳声称的时长
+
+        ROS_INFO("Video info - total_frames: %d, fps: %.2f, actual_duration: %.2fs, claimed_duration: %.2fs", 
+                total_frames, video_fps, seg_actual_duration, seg_claimed_duration);
+
+        // 检查时间范围是否有重叠
         if (start_timestamp >= seg_end || end_timestamp <= seg_start) {
             ROS_WARN("Video segment doesn't contain requested time range: %s", video_path.c_str());
             cap.release();
             continue;
         }
 
-        // 计算起始帧（使用round提高精度）
-        if (start_timestamp > seg_start) {
-            double offset = std::max(0.0, start_timestamp - seg_start);
-            start_frame = static_cast<int>(std::round(offset * video_fps));
+        // 重新计算时间映射（基于视频实际时长）
+        double actual_seg_start = seg_start; // 可以根据需要调整
+        double actual_seg_end = actual_seg_start + seg_actual_duration;
+
+        // 如果声称的时长与实际时长差异很大，使用实际时长
+        if (std::abs(seg_claimed_duration - seg_actual_duration) > 1.0) {
+            ROS_WARN("Claimed duration (%.2fs) differs significantly from actual duration (%.2fs), using actual duration", 
+                    seg_claimed_duration, seg_actual_duration);
+            actual_seg_end = actual_seg_start + seg_actual_duration;
         }
 
-        // 计算结束帧（使用round提高精度）
-        if (end_timestamp < seg_end) {
-            double offset = end_timestamp - seg_start;
-            end_frame = static_cast<int>(std::round(offset * video_fps));
-        } else {
-            end_frame = total_frames - 1;
-        }
+        // 计算相对于实际开始时间的偏移
+        double start_offset = std::max(0.0, start_timestamp - actual_seg_start);
+        double end_offset = std::min(seg_actual_duration, end_timestamp - actual_seg_start);
 
-        // 增加调试信息，查看中间计算结果
-        ROS_INFO("Intermediate calcs - offset_start: %.6f, offset_end: %.6f, frame_start: %d, frame_end: %d", 
-                (start_timestamp - seg_start), (end_timestamp - seg_start), start_frame, end_frame);
+        // 计算帧号
+        start_frame = static_cast<int>(std::round(start_offset * video_fps));
+        end_frame = static_cast<int>(std::round(end_offset * video_fps));
 
-        // 确保帧范围有效且合理
+        // 确保帧号有效
         start_frame = std::clamp(start_frame, 0, total_frames-1);
         end_frame = std::clamp(end_frame, start_frame, total_frames-1);
 
-        // 如果帧数相同，强制至少一帧差异
-        if (start_frame == end_frame) {
-            if (end_frame < total_frames - 1) {
-                end_frame = start_frame + 1;
-            } else if (start_frame > 0) {
-                start_frame = end_frame - 1;
+        // 如果时间范围太短，确保至少有一帧
+        if (end_frame <= start_frame) {
+            if (total_frames > 1) {
+                end_frame = std::min(start_frame + 1, total_frames-1);
             }
-            ROS_WARN("Adjusted frame range to avoid identical start/end frames");
         }
+
+        ROS_INFO("Final frames - start_frame: %d, end_frame: %d, frame_count: %d", 
+                start_frame, end_frame, end_frame - start_frame + 1);
 
         ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f seg_start: %.6f seg_end: %.6f", 
                 video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp, seg_start, seg_end);
