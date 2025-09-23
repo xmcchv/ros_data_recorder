@@ -368,20 +368,25 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
         // 计算起始帧
         if (start_timestamp > seg_start) {
             double offset = start_timestamp - seg_start;
-            start_frame = static_cast<int>(std::round(offset * video_fps));
+            start_frame = static_cast<int>(std::floor(offset * video_fps));
         }
 
         // 计算结束帧
         if (end_timestamp < seg_end) {
             double offset = end_timestamp - seg_start;
-            end_frame = static_cast<int>(std::round(offset * video_fps));
+            end_frame = static_cast<int>(std::ceil(offset * video_fps));
         } else {
             end_frame = total_frames - 1;
         }
 
+        // 增加时间范围校验
+        if (end_timestamp - start_timestamp < 1.0/video_fps) {
+            end_frame = start_frame + 1;
+        }
+
         // 确保帧号在有效范围内
-        start_frame = std::max(0, std::min(start_frame, total_frames - 1));
-        end_frame = std::max(0, std::min(end_frame, total_frames - 1));
+        start_frame = std::clamp(start_frame, 0, total_frames-1);
+        end_frame = std::clamp(end_frame, start_frame, total_frames-1);
 
         ROS_INFO("Playing video segment: %s, start_frame: %d, end_frame: %d start_timestamp: %.6f end_timestamp: %.6f seg_start: %.6f seg_end: %.6f", 
                         video_path.c_str(), start_frame, end_frame, start_timestamp, end_timestamp, seg_start, seg_end);
