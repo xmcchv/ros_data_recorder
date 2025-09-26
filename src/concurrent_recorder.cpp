@@ -46,15 +46,13 @@ ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), db_(nullptr)
     initDatabase();
     
     // 设置发布器
-    image_pub_ = nh_.advertise<sensor_msgs::Image>("/recordImage", 10);
+    image_pub_ = nh_.advertise<sensor_msgs::Image>(config_["playback_topic"], 10);
     
     // 订阅时间戳控制消息
-    timestamp_sub_ = nh_.subscribe("/recordTimes", 100, &ConcurrentRecorder::timestampCallback, this);
+    timestamp_sub_ = nh_.subscribe(config_["record_topic"], 100, &ConcurrentRecorder::timestampCallback, this);
     
     // 订阅压缩图像话题
-    std::string image_topic;
-    nh_.param("image_topic", image_topic, std::string("/detectImage/compressed"));
-    image_sub_ = nh_.subscribe(image_topic, 100, &ConcurrentRecorder::imageCallback, this);
+    image_sub_ = nh_.subscribe(config_["image_topic"], 100, &ConcurrentRecorder::imageCallback, this);
     
     // 启动工作线程
     recording_thread_ = std::thread(&ConcurrentRecorder::recordingWorker, this);
@@ -560,6 +558,18 @@ void ConcurrentRecorder::loadConfig(const std::string& config_file) {
         if (fs::exists(config_file)) {
             YAML::Node config = YAML::LoadFile(config_file);
             
+            if (config["playback_topic"]) {
+                config_["playback_topic"] = config["playback_topic"].as<std::string>();
+            }
+
+            if (config["image_topic"]) {
+                config_["image_topic"] = config["image_topic"].as<std::string>();
+            }
+
+            if (config["record_topic"]) {
+                config_["record_topic"] = config["record_topic"].as<std::string>();
+            }
+
             if (config["fps"]) {
                 fps_ = config["fps"].as<double>();
             }
@@ -591,5 +601,9 @@ void ConcurrentRecorder::loadConfig(const std::string& config_file) {
         segment_duration_ = 300; // 5分钟
         config_["compression_quality"] = "90";
         config_["image_compression_format"] = "jpeg";
+
+        config_["playback_topic"] = "/recordImage";
+        config_["record_topic"] = "/recordTimes";
+        config_["playback_topic"] = "/detectImage/compressed";
     }
 }
