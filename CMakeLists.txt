@@ -66,13 +66,3 @@ install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_node
 install(DIRECTORY include/${PROJECT_NAME}/
   DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
 )
-
-
-add_executable(test_recorder src/test_recorder.cpp)
-target_link_libraries(test_recorder
-  ${catkin_LIBRARIES}
-  ${PROJECT_NAME}
-)
-install(TARGETS test_recorder
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
