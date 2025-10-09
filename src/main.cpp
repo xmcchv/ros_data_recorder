@@ -5,11 +5,16 @@
 
 std::atomic<bool> g_shutdown_requested{false};
 
-void printUsage(const std::string& programName)
+void printCopyright()
 {
-    std::cout << "Usage: " << programName << " [options]" << std::endl;
-    std::cout << "Options:" << std::endl;
-    std::cout << "  --help, -h        Show this help message" << std::endl;
+    std::string company_name = R"(
+██╗░░░██╗██████╗░██╗░░██╗░░░░░██╗
+╚██╗░██╔╝██╔══██╗██║░██╔╝░░░░░██║
+░╚████╔╝░██║░░██║█████═╝░░░░░░██║
+░░╚██╔╝░░██║░░██║██╔═██╗░██╗░░██║
+░░░██║░░░██████╔╝██║░╚██╗╚█████╔╝
+░░░╚═╝░░░╚═════╝░╚═╝░░╚═╝░╚════╝░)";
+    std::cout << company_name << std::endl;
 }
 
 void signalHandler(int signal)
@@ -26,7 +31,7 @@ int main(int argc, char** argv)
     
     ros::init(argc, argv, "concurrent_data_recorder", ros::init_options::NoSigintHandler);
     
-    printUsage(argv[0]);
+    printCopyright();
 
     try
     {
