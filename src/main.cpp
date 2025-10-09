@@ -5,6 +5,13 @@
 
 std::atomic<bool> g_shutdown_requested{false};
 
+void printUsage(const std::string& programName)
+{
+    std::cout << "Usage: " << programName << " [options]" << std::endl;
+    std::cout << "Options:" << std::endl;
+    std::cout << "  --help, -h        Show this help message" << std::endl;
+}
+
 void signalHandler(int signal)
 {
     g_shutdown_requested = true;
@@ -19,6 +26,8 @@ int main(int argc, char** argv)
     
     ros::init(argc, argv, "concurrent_data_recorder", ros::init_options::NoSigintHandler);
     
+    printUsage(argv[0]);
+
     try
     {
         ConcurrentRecorder recorder;
