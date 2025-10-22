@@ -47,6 +47,7 @@ private:
     ros::Subscriber timestamp_sub_;
     ros::Subscriber image_sub_;
     ros::Publisher image_pub_;
+    ros::Publisher video_pub_;
     
     std::thread recording_thread_;
     std::thread playback_thread_;
@@ -81,6 +82,11 @@ private:
     int segment_duration_; // 视频分段时长（秒）
 
     int max_video_duration_; // 最大视频时长（秒）
+
+    // 视频保存路径
+    std::string video_save_path_;
+
+    
 };
 
 #endif // CONCURRENT_RECORDER_H

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <chrono>
 #include <ctime>
+#include <std_msgs/Bool.h>
 
 namespace fs = std::filesystem;
 
@@ -47,6 +48,9 @@ ConcurrentRecorder::ConcurrentRecorder() : nh_("~"), db_(nullptr)
     
     // 设置发布器
     image_pub_ = nh_.advertise<sensor_msgs::Image>(config_["playback_topic"], 10);
+    video_pub_ = nh_.advertise<std_msgs::Bool>(config_["video_topic"], 10);
+
+    video_save_path_ = config_["video_save_path"];
     
     // 订阅时间戳控制消息
     timestamp_sub_ = nh_.subscribe(config_["record_topic"], 100, &ConcurrentRecorder::timestampCallback, this);
@@ -320,6 +324,14 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
     ROS_INFO("Found %lu video segments for time range %.6f to %.6f", 
              video_segments.size(), start_timestamp, end_timestamp);
 
+    // 创建输出视频文件
+    std::string output_video_path = video_save_path_;
+    cv::VideoWriter video_writer;
+    cv::Size frame_size;
+    double output_fps = fps_;
+    bool video_writer_initialized = false;
+    size_t total_frames_saved = 0;
+        
     // 处理每个视频段
     size_t published_count = 0;
     for (const auto& segment : video_segments) {
@@ -431,29 +443,83 @@ void ConcurrentRecorder::playbackFromBag(double start_timestamp, double end_time
                                            (end_frame - start_frame);
             double frame_time = start_timestamp + frame_relative_position * (end_timestamp - start_timestamp);
             
-            ROS_INFO("Publishing frame %d at timestamp %.6f (relative: %.3f)", 
+            ROS_INFO("Saving frame %d at timestamp %.6f (relative: %.3f)", 
                     current_frame, frame_time, frame_relative_position);
             
-            // 发布图像
-            cv_bridge::CvImage cv_image;
-            cv_image.image = frame;
-            cv_image.encoding = "bgr8";
-            cv_image.header.frame_id = "map";
-            cv_image.header.stamp = ros::Time().fromSec(frame_time);
-            image_pub_.publish(cv_image.toImageMsg());
+            // 初始化视频写入器（如果尚未初始化）
+            if (!video_writer_initialized) {
+                frame_size = frame.size();
+                int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v'); // MP4编码
+                video_writer.open(output_video_path, fourcc, output_fps, frame_size, true);
+                
+                if (!video_writer.isOpened()) {
+                    ROS_ERROR("Failed to open video writer for path: %s", output_video_path.c_str());
+                    cap.release();
+                    break;
+                }
+                video_writer_initialized = true;
+                ROS_INFO("Video writer initialized: %s, fps: %.2f, size: %dx%d", 
+                        output_video_path.c_str(), output_fps, frame_size.width, frame_size.height);
+            }
             
-            published_count++;
-            messages_played_++;
+            // 写入帧到视频文件
+            video_writer.write(frame);
+            total_frames_saved++;
             
-            // 控制播放速度
-            ros::Duration(1.0 / video_fps).sleep();
             current_frame++;
         }
+        // while (current_frame <= end_frame) {
+        //     if (interrupt_flag || stop_threads_ || !ros::ok()) {
+        //         break;
+        //     }
+            
+        //     // 读取帧
+        //     if (!cap.read(frame) || frame.empty()) {
+        //         ROS_ERROR("Failed to read frame %d/%d", current_frame, end_frame);
+        //         break;
+        //     }
+
+        //     // 关键修改：基于数据库时间戳计算当前帧的时间戳
+        //     // 使用线性插值将帧号映射回实际时间戳
+        //     double frame_relative_position = static_cast<double>(current_frame - start_frame) / 
+        //                                    (end_frame - start_frame);
+        //     double frame_time = start_timestamp + frame_relative_position * (end_timestamp - start_timestamp);
+            
+        //     ROS_INFO("Publishing frame %d at timestamp %.6f (relative: %.3f)", 
+        //             current_frame, frame_time, frame_relative_position);
+            
+        //     // 发布图像
+        //     cv_bridge::CvImage cv_image;
+        //     cv_image.image = frame;
+        //     cv_image.encoding = "bgr8";
+        //     cv_image.header.frame_id = "map";
+        //     cv_image.header.stamp = ros::Time().fromSec(frame_time);
+        //     image_pub_.publish(cv_image.toImageMsg());
+            
+        //     published_count++;
+        //     messages_played_++;
+            
+        //     // 控制播放速度
+        //     ros::Duration(1.0 / video_fps).sleep();
+        //     current_frame++;
+        // }
         
         cap.release();
     }
 
-    ROS_INFO("Playback finished, published %lu frames", published_count);
+    // 关闭视频写入器
+    if (video_writer_initialized) {
+        video_writer.release();
+        ROS_INFO("Video saving finished. Saved %lu frames to: %s", total_frames_saved, output_video_path.c_str());
+    } else {
+        ROS_WARN("No frames were saved. Output video file not created.");
+    }
+
+    // 创建bool类型消息
+    std_msgs::Bool video_finished_msg;
+    video_finished_msg.data = true;
+    video_pub_.publish(video_finished_msg);
+    // ROS_INFO("Playback finished, published %lu frames", published_count);
 
     interrupt_flag = true;
     if (interrupt_checker.joinable()) {
@@ -589,6 +655,14 @@ void ConcurrentRecorder::loadConfig(const std::string& config_file) {
             if (config["max_video_duration"]) {
                 max_video_duration_ = config["max_video_duration"].as<int>();
             }
+
+            if (config["video_save_path"]) {
+                config_["video_save_path"] = config["video_save_path"].as<std::string>();
+            }
+
+            if (config["video_topic"]) {
+                config_["video_topic"] = config["video_topic"].as<std::string>();
+            }
             
             ROS_INFO("Configuration loaded from: %s", config_file.c_str());
             ROS_INFO("FPS: %.2f, Segment Duration: %d seconds, Max Video Duration: %d seconds", fps_, segment_duration_, max_video_duration_);
@@ -605,5 +679,7 @@ void ConcurrentRecorder::loadConfig(const std::string& config_file) {
         config_["playback_topic"] = "/recordImage";
         config_["record_topic"] = "/recordTimes";
         config_["playback_topic"] = "/detectImage/compressed";
+        config_["video_save_path"] = "/home/ydkj/chengdu_ws/src/ros_data_recorder/videos/recorded_video.mp4";
+        config_["video_topic"] = "/recordVideo";
     }
 }

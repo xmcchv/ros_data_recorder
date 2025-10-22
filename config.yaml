@@ -4,6 +4,11 @@ image_topic: "/detectImage/compressed"
 record_topic: "/recordTimes"
 playback_topic: "/recordImage"
 
+# 视频路径配置
+video_save_path: "/media/tl/Lenovo/data/videos/recorded_video.mp4"
+video_topic: "/recordVideo"
+
+
 # 性能配置
 max_buffer_size: 10485760  # 10MB
 flush_interval: 1.0        # 1秒
@@ -15,4 +20,4 @@ fps: 10.0                    # 视频帧率，默认30帧
 segment_duration: 300        # 视频分段时长(秒)，默认5分钟
 compression_quality: 90      # 压缩质量(0-100)
 image_compression_format: jpeg  # 图像压缩格式
-max_video_duration: 21600    # 最大视频时长(秒)，默认6小时
+max_video_duration: 604800    # 最大视频时长(秒)，默认6小时

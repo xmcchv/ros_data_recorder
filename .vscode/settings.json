@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "random": "cpp",
+        "condition_variable": "cpp",
+        "ranges": "cpp"
+    }
+}
